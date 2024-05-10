@@ -210,7 +210,18 @@ def train(data_path, patch_size=50, mini_batch=512, nms_th=0.05, line_positive_t
       except:
         continue
       # extract features from backbone_net
-      stensor = ME.SparseTensor(feats, coords=coords).to(device)
+      # stensor = ME.SparseTensor(feats, coords=coords).to(device)
+      
+      # 将 feats 和 coords 移动到device
+      feats = torch.Tensor(feats).to(device)
+      coords = torch.Tensor(coords).to(device)
+      # 创建 CoordinateManager
+      dimension_of_coords = coords.shape[1]
+      coordinate_manager = ME.CoordinateManager(D=3)
+      stensor = ME.SparseTensor(features=feats, coordinates=coords,coordinate_manager=coordinate_manager)
+      stensor.C.to(device)
+      stensor.F.to(device)
+
       features = backbone_net(stensor).F
 
       # mini_features: features of each patch, of size num_patches x points_per_patch x 32, e.g., 20 x 32.
@@ -610,7 +621,18 @@ def evaluate(dataset_loader, patch_size=50, mini_batch=512, nms_th=0.05, line_po
         continue
 
       # extract features from backbone_net
-      stensor = ME.SparseTensor(feats, coords=coords).to(device)
+      # stensor = ME.SparseTensor(feats, coords=coords).to(device)
+
+      # 将 feats 和 coords 移动到device
+      feats = torch.Tensor(feats).to(device)
+      coords = torch.Tensor(coords).to(device)
+      # 创建 CoordinateManager
+      dimension_of_coords = coords.shape[1]
+      coordinate_manager = ME.CoordinateManager(D=3)
+      stensor = ME.SparseTensor(features=feats, coordinates=coords,coordinate_manager=coordinate_manager)
+      stensor.C.to(device)
+      stensor.F.to(device)
+
       features = backbone_net(stensor).F
 
       # mini_features: features of each patch, of size num_patches x points_per_patch x 32, e.g., 20 x 32.

@@ -47,8 +47,18 @@ def predict(test_file_path, backbone_pth, patch_pth, vertex_pth, line_pth):
     coords = np.loadtxt(test_file_path.replace('.down', '.coords'), dtype=np.float32) # Ndx3
     patch_index = np.loadtxt(test_file_path.replace('.down', '.patch_index'), dtype=np.int32) # Ndx3
 
-    
-    stensor = ME.SparseTensor(torch.from_numpy(feats).float(), coords=torch.from_numpy(coords)).to(device)
+    # stensor = ME.SparseTensor(torch.from_numpy(feats).float(), coords=torch.from_numpy(coords)).to(device)
+    # 将 feats 和 coords 移动到device
+    feats = torch.Tensor(feats).to(device)
+    coords = torch.Tensor(coords).to(device)
+    # 创建 CoordinateManager
+    dimension_of_coords = coords.shape[1]
+    coordinate_manager = ME.CoordinateManager(D=3)
+    stensor = ME.SparseTensor(features=feats, coordinates=coords,coordinate_manager=coordinate_manager)
+    stensor.C.to(device)
+    stensor.F.to(device)
+    # stensor = ME.SparseTensor(torch.from_numpy(feats).float(), coordinates=torch.from_numpy(coords),device=device)
+
     features = backbone_net(stensor).F
 
     '''second, feed into patch_net to find patches with vertex'''
@@ -102,7 +112,17 @@ def predict(test_file_path, backbone_pth, patch_pth, vertex_pth, line_pth):
                 dropped_vertex_index.append(i)
     selected_vertex_index = [i for i in range(len(predicted_vertex_list)) if i not in dropped_vertex_index]
     batch_output_vertex_coord = batch_output_vertex_coord[selected_vertex_index]
-    batch_input_vertex_prob = np.array(batch_input_vertex_prob)[selected_vertex_index]
+    
+    # batch_input_vertex_prob = np.array(batch_input_vertex_prob)[selected_vertex_index]
+
+    #以下为修改代码
+    # 将 batch_input_vertex_prob 中的每个张量转换为 NumPy 数组，并存储在一个新的列表中
+    converted_probs = [tensor.detach().cpu().numpy() for tensor in batch_input_vertex_prob]
+    # 使用 selected_vertex_index 来选择相应的元素
+    selected_probs = [converted_probs[i] for i in selected_vertex_index]    
+    # 将 selected_probs 转换为 NumPy 数组
+    batch_input_vertex_prob = np.array(selected_probs)
+
 
     predicted_vertex_list = batch_output_vertex_coord.detach().cpu().numpy()
     predicted_vertex_probs = np.array(batch_input_vertex_prob)
@@ -157,6 +177,8 @@ def predict(test_file_path, backbone_pth, patch_pth, vertex_pth, line_pth):
         if predicted_index > 0.5:
             predicted_line_list.append(batch_index_line[i])
             predicted_line_probs.append(predicted_index)
+    #添加代码
+    predicted_line_probs = [tensor.detach().cpu().numpy() for tensor in predicted_line_probs]
     return np.array(predicted_vertex_list), np.array(predicted_vertex_probs), np.array(predicted_line_list), np.array(predicted_line_probs)
     
 
@@ -176,6 +198,7 @@ if __name__ == "__main__":
     for test_file in tqdm(test_file_list):
         if os.path.exists(os.path.join(save_to_folder, test_file.split('/')[-1].replace('.down', '_line.txt'))):
             continue
+        
         predicted_vertex_list, predicted_vertex_probs, predicted_line_list, predicted_line_probs = predict(
             test_file,
             os.path.join(curr_dir, f'../checkpoint_sigma{sigma}clip{clip}_pretrained/backbone_patchSize{patch_size}_miniBatch512_nmsTh0.01_linePosTh0.01_lineNegTh0.05_lossweightP1.0V50.0L1.0_Val.pth'),

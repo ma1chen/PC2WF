@@ -226,6 +226,7 @@ class GenPatch:
         feats = np.hstack(feats)
         coords = np.floor(self.pointcloud / 0.0075)
         inds = ME_utils.sparse_quantize(coords, return_index=True)
+        inds=inds[1]
         coords = coords[inds]
         coords = np.hstack([coords, np.zeros((len(coords), 1))])
         pointcloud_down = self.pointcloud[inds]

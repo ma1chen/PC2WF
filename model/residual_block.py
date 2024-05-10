@@ -29,7 +29,8 @@ class BasicBlockBase(nn.Module):
         kernel_size=3,
         stride=1,
         dilation=dilation,
-        has_bias=False,
+        # has_bias=False,
+        bias=False,
         dimension=D)
     self.norm2 = get_norm(self.NORM_TYPE, planes, bn_momentum=bn_momentum, D=D)
     self.downsample = downsample

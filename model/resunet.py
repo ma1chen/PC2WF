@@ -34,7 +34,8 @@ class ResUNet2(ME.MinkowskiNetwork):
         kernel_size=conv1_kernel_size,
         stride=1,
         dilation=1,
-        has_bias=False,
+        # has_bias=False,
+        bias=False,
         dimension=D)
     self.norm1 = get_norm(NORM_TYPE, CHANNELS[1], bn_momentum=bn_momentum, D=D)
 
@@ -47,7 +48,8 @@ class ResUNet2(ME.MinkowskiNetwork):
         kernel_size=3,
         stride=2,
         dilation=1,
-        has_bias=False,
+        # has_bias=False,
+        bias=False,
         dimension=D)
     self.norm2 = get_norm(NORM_TYPE, CHANNELS[2], bn_momentum=bn_momentum, D=D)
 
@@ -60,7 +62,8 @@ class ResUNet2(ME.MinkowskiNetwork):
         kernel_size=3,
         stride=2,
         dilation=1,
-        has_bias=False,
+        # has_bias=False,
+        bias=False,
         dimension=D)
     self.norm3 = get_norm(NORM_TYPE, CHANNELS[3], bn_momentum=bn_momentum, D=D)
 
@@ -73,7 +76,8 @@ class ResUNet2(ME.MinkowskiNetwork):
         kernel_size=3,
         stride=2,
         dilation=1,
-        has_bias=False,
+        # has_bias=False,
+        bias=False,
         dimension=D)
     self.norm4 = get_norm(NORM_TYPE, CHANNELS[4], bn_momentum=bn_momentum, D=D)
 
@@ -86,7 +90,8 @@ class ResUNet2(ME.MinkowskiNetwork):
         kernel_size=3,
         stride=2,
         dilation=1,
-        has_bias=False,
+        # has_bias=False,
+        bias=False,
         dimension=D)
     self.norm4_tr = get_norm(NORM_TYPE, TR_CHANNELS[4], bn_momentum=bn_momentum, D=D)
 
@@ -99,7 +104,8 @@ class ResUNet2(ME.MinkowskiNetwork):
         kernel_size=3,
         stride=2,
         dilation=1,
-        has_bias=False,
+        # has_bias=False,
+        bias=False,
         dimension=D)
     self.norm3_tr = get_norm(NORM_TYPE, TR_CHANNELS[3], bn_momentum=bn_momentum, D=D)
 
@@ -112,7 +118,8 @@ class ResUNet2(ME.MinkowskiNetwork):
         kernel_size=3,
         stride=2,
         dilation=1,
-        has_bias=False,
+        # has_bias=False,
+        bias=False,
         dimension=D)
     self.norm2_tr = get_norm(NORM_TYPE, TR_CHANNELS[2], bn_momentum=bn_momentum, D=D)
 
@@ -125,7 +132,8 @@ class ResUNet2(ME.MinkowskiNetwork):
         kernel_size=1,
         stride=1,
         dilation=1,
-        has_bias=False,
+        # has_bias=False,
+        bias=False,
         dimension=D)
 
     # self.block1_tr = BasicBlockBN(TR_CHANNELS[1], TR_CHANNELS[1], bn_momentum=bn_momentum, D=D)
@@ -136,7 +144,8 @@ class ResUNet2(ME.MinkowskiNetwork):
         kernel_size=1,
         stride=1,
         dilation=1,
-        has_bias=True,
+        # has_bias=True,
+        bias=True,
         dimension=D)
 
   def forward(self, x):
@@ -187,8 +196,10 @@ class ResUNet2(ME.MinkowskiNetwork):
     if self.normalize_feature:
       return ME.SparseTensor(
           out.F / torch.norm(out.F, p=2, dim=1, keepdim=True),
-          coords_key=out.coords_key,
-          coords_manager=out.coords_man)
+          # coords_key=out.coords_key,
+          coordinate_map_key=out.coordinate_map_key,
+          # coords_manager=out.coords_man)
+          coordinate_manager=out.coordinate_manager)
     else:
       return out
 
@@ -277,7 +288,8 @@ class NewResUNet2(ME.MinkowskiNetwork):
         kernel_size=conv1_kernel_size,
         stride=1,
         dilation=1,
-        has_bias=False,
+        # has_bias=False,
+        bias=False,
         dimension=D)
     self.norm1 = get_norm(NORM_TYPE, CHANNELS[1], bn_momentum=bn_momentum, D=D)
 
@@ -290,7 +302,8 @@ class NewResUNet2(ME.MinkowskiNetwork):
         kernel_size=3,
         stride=2,
         dilation=1,
-        has_bias=False,
+        # has_bias=False,
+        bias=False,
         dimension=D)
     self.norm2 = get_norm(NORM_TYPE, CHANNELS[2], bn_momentum=bn_momentum, D=D)
 
@@ -303,7 +316,8 @@ class NewResUNet2(ME.MinkowskiNetwork):
         kernel_size=3,
         stride=2,
         dilation=1,
-        has_bias=False,
+        # has_bias=False,
+        bias=False,
         dimension=D)
     self.norm3 = get_norm(NORM_TYPE, CHANNELS[3], bn_momentum=bn_momentum, D=D)
 
@@ -316,7 +330,8 @@ class NewResUNet2(ME.MinkowskiNetwork):
         kernel_size=3,
         stride=2,
         dilation=1,
-        has_bias=False,
+        # has_bias=False,
+        bias=False,
         dimension=D)
     self.norm4 = get_norm(NORM_TYPE, CHANNELS[4], bn_momentum=bn_momentum, D=D)
 
@@ -329,7 +344,8 @@ class NewResUNet2(ME.MinkowskiNetwork):
         kernel_size=3,
         stride=2,
         dilation=1,
-        has_bias=False,
+        # has_bias=False,
+        bias=False,
         dimension=D)
     self.norm4_tr = get_norm(NORM_TYPE, TR_CHANNELS[4], bn_momentum=bn_momentum, D=D)
 
@@ -342,7 +358,8 @@ class NewResUNet2(ME.MinkowskiNetwork):
         kernel_size=3,
         stride=2,
         dilation=1,
-        has_bias=False,
+        # has_bias=False,
+        bias=False,
         dimension=D)
     self.norm3_tr = get_norm(NORM_TYPE, TR_CHANNELS[3], bn_momentum=bn_momentum, D=D)
 
@@ -355,7 +372,8 @@ class NewResUNet2(ME.MinkowskiNetwork):
         kernel_size=3,
         stride=2,
         dilation=1,
-        has_bias=False,
+        # has_bias=False,
+        bias=False,
         dimension=D)
     self.norm2_tr = get_norm(NORM_TYPE, TR_CHANNELS[2], bn_momentum=bn_momentum, D=D)
 
@@ -368,7 +386,8 @@ class NewResUNet2(ME.MinkowskiNetwork):
         kernel_size=1,
         stride=1,
         dilation=1,
-        has_bias=False,
+        # has_bias=False,
+        bias=False,
         dimension=D)
 
     # self.block1_tr = BasicBlockBN(TR_CHANNELS[1], TR_CHANNELS[1], bn_momentum=bn_momentum, D=D)
@@ -379,7 +398,8 @@ class NewResUNet2(ME.MinkowskiNetwork):
         kernel_size=1,
         stride=1,
         dilation=1,
-        has_bias=True,
+        # has_bias=True,
+        bias=True,
         dimension=D)
     
     self.fc1 = nn.Linear(32, 16)
