@@ -1,5 +1,5 @@
 import argparse
-from train_end2end import train
+from my_train_end2end_1 import train
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Training PC2WF.')

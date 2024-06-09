@@ -14,7 +14,6 @@ import random
 from math import ceil
 from tqdm import tqdm
 
-
 def add_noise(clean_point_path, dst_noisy_file, ori_gt_f, dst_noise_gt_f, sigma=0.01, clip=0.02):
     clean_pts = np.loadtxt(clean_point_path)
     row, col = clean_pts.shape
@@ -56,11 +55,15 @@ def add_noise(clean_point_path, dst_noisy_file, ori_gt_f, dst_noise_gt_f, sigma=
         f.write("# max_z: {}, min_z: {}\n".format(max_z, min_z))
 
 def add_noise_one_file(clean_point_path):
-    dst_noisy_file = os.path.join(dst_noise_dir, clean_point_path.split('/')[-1])
-    ori_gt_f = clean_point_path.replace('/xyz/', '/gt/').replace('.xyz', '.obj')
-    dst_noise_gt_f = os.path.join(dst_noise_gt_dir, ori_gt_f.split('/')[-1])
-    add_noise(clean_point_path, dst_noisy_file, ori_gt_f, dst_noise_gt_f, sigma=sigma, clip=clip)
-
+    try:
+        dst_noisy_file = os.path.join(dst_noise_dir, clean_point_path.split('/')[-1])
+        ori_gt_f = clean_point_path.replace('/xyz/', '/gt/').replace('.xyz', '.obj')
+        dst_noise_gt_f = os.path.join(dst_noise_gt_dir, ori_gt_f.split('/')[-1])
+        add_noise(clean_point_path, dst_noisy_file, ori_gt_f, dst_noise_gt_f, sigma=sigma, clip=clip)
+        return True
+    except Exception as e:
+        print(f"Error processing file {clean_point_path}: {e}")
+        return False
 
 if __name__ == '__main__':
     sigma = 0.01
@@ -70,6 +73,7 @@ if __name__ == '__main__':
     if os.path.exists(dst_noise_root):
         shutil.rmtree(dst_noise_root)
 
+    total_processed = 0
     for dir_name in ['train', 'test', 'validation']:
         file_list = glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../simulateRoof_data/clean/xyz/{}/*.xyz'.format(dir_name)))
         file_list.sort()
@@ -79,6 +83,8 @@ if __name__ == '__main__':
         os.makedirs(dst_noise_dir)
         os.makedirs(dst_noise_gt_dir)
 
-        pool = multiprocessing.Pool(7)
-        pool.map(add_noise_one_file, file_list)
-        
+        with multiprocessing.Pool(7) as pool:
+            results = pool.map(add_noise_one_file, file_list)
+            total_processed += sum(results)
+
+    print(f"Successfully processed {total_processed} files.")

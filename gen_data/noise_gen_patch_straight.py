@@ -18,23 +18,25 @@ from tqdm import tqdm
 from scipy import spatial
 from noise_gen_line_train import gen_line
 
-
 class GenPatch:
     def __init__(self, point_path, patch_size=50, sigma=0.01, clip=0.02, train_val_test='test'):
+        # 初始化基础参数
         self.train_val_test = train_val_test
         self.clean_noise = 'noise'
         # train_val_test = 'train' if is_train else 'test'
-        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../abc_data/patches_{}_noise_sigma{}clip{}/{}'.format(patch_size, sigma, clip, train_val_test))
-
+        # 设置基础目录
+        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../simulateRoof_data/patches_{}_noise_sigma{}clip{}/{}'.format(patch_size, sigma, clip, train_val_test))
+        # 确保基础目录存在
         assert os.path.exists(base_dir)
-
+        # 设置保存路径
         self.save_root_path = os.path.join(base_dir, point_path.split('/')[-1])
-
+        # 如果已经存在相关文件，直接返回（跳过处理）
         if os.path.exists(self.save_root_path.replace('.xyz', '.mini_line')):
             return
         if self.train_val_test == 'test' and os.path.exists(self.save_root_path.replace('.xyz', '.patch_index')):
             return
         
+        # 读取点云数据并进行下采样
         self.point_path = point_path
         self.patch_size = patch_size
         self.pointcloud = np.loadtxt(point_path)
@@ -43,8 +45,11 @@ class GenPatch:
         self.pointcloud_down = self.down_sample()
         self.build_graph()
         
+        # 如果是测试集，执行特定操作后直接返回
         if self.train_val_test == 'test':
+            # 生成k个种子点，种子点均匀分布（k可修改）
             seed_points = self.farthest_sample(k=10000)
+            # 生成patch，每个种子点生成一个patch
             _, patch_index = self.gen_patch(self.pointcloud_down[seed_points], patch_per_seed=1)
             np.savetxt(self.save_root_path.replace('.xyz', '.patch_index'), patch_index, fmt='%d')
             return
@@ -52,15 +57,21 @@ class GenPatch:
         # load gt
         self.vert_gt, self.curve_gt, self.edge_gt, self.curve_line_gt = self.load_gt()
         
+        # 设置最大顶点数
         max_vert = 1000
 
         # generate patch with vert
+        # 设置用于生成patch的种子顶点seed_vert
         if len(self.vert_gt) <= max_vert:
             seed_vert = self.vert_gt
         else:
             seed_vert = self.vert_gt[np.random.choice(list(range(len(self.vert_gt))), size=max_vert, replace=False)]
+        # 生成包含顶点的patch，指定每个种子点生成两个patch
         patch_vert, patch_vert_index = self.gen_patch(seed_vert, patch_per_seed=2)
         # filter to guarantee patch_vert containing vert
+        # 过滤规则：1.遍历每个生成的patch，计算patch中每个点到所有ground truth顶点的距离。
+        # 2.找到距离最小的顶点并记录。
+        # 3.如果最小距离小于等于0.01，则保留该patch，并记录索引和顶点位置。
         keep_idx = []
         patch_vertex_gt = []
         for idx, patch in enumerate(patch_vert):
@@ -75,12 +86,16 @@ class GenPatch:
         # generate other patch
         # fistly, patch with edge
         seed_edge = []
+        # 对于每条边缘，生成两个随机中间点作为种子点seed_edge
         for edge in self.edge_gt:
             for _ in range(2):
                 point = edge[0:3]+np.random.random()*(edge[3:6]-edge[0:3])
                 seed_edge.append(point)
+        # 调用gen_patch()方法，根据这些种子点生成patch，每个种子点生成一个patch。
         patch_edge, patch_edge_index = self.gen_patch(seed_edge, patch_per_seed=1)
         # filter to guarantee patch_edge containing no vert and curve
+        # 过滤规则：1.遍历每个生成的patch，计算patch中每个点到所有ground truth顶点的最小距离。
+        # 2.如果最小距离大于等于0.03，则保留该patch，并记录索引。
         keep_idx = []
         for idx, patch in enumerate(patch_edge):
             dist_vert = [np.min(np.linalg.norm(self.vert_gt-point, axis=1)) for point in patch]
@@ -89,7 +104,9 @@ class GenPatch:
         patch_edge = patch_edge[keep_idx]
         patch_edge_index = patch_edge_index[keep_idx]
         # secondly, patch with random seed
+        # 从下采样后的点云中随机选择点作为种子点，种子点数量与patch_vert相同。
         seed_random = self.pointcloud_down[np.random.randint(0, len(self.pointcloud_down), [len(patch_vert), 1])]
+        # 调用gen_patch()方法，根据这些种子点生成patch，每个种子点生成一个patch。
         patch_random, patch_random_index = self.gen_patch(seed_random, patch_per_seed=1)
         # filter to guarantee patch_random containing no vert and curve
         keep_idx = []
@@ -117,8 +134,10 @@ class GenPatch:
         patch_list = []
         patch_index = []
         # first, randomly select new seeds from neighbors of seed_points
+        # dist：每个种子点到其邻居的距离。seed_idx：每个种子点的邻居索引。
         dist, seed_idx = self.nbrs.query(seed_points, k=10)
         for i in range(len(seed_points)):
+            # select_seed_idx：选择与当前种子点距离小于0.05的邻居索引。
             select_seed_idx = seed_idx[i][ dist[i]<0.05 ]
             if len(select_seed_idx) == 0:
                 continue
@@ -207,6 +226,7 @@ class GenPatch:
                 item_gt = gt_f.readline()
         # choose verteices with lines
         vert_with_line_index = []
+        # 通过遍历 edge_gt，选择包含边的顶点并存储在 vert_with_line_index 列表中。
         for e in edge_gt:
             if e[0:3] not in vert_with_line_index:
                 vert_with_line_index.append(e[0:3])
@@ -240,18 +260,25 @@ class GenPatch:
         return pointcloud_down
 
 def multi_process(f):
-    GenPatch(f, patch_size=patch_size, sigma=sigma, clip=clip, train_val_test=dirname)
+    print(f)
+    try:
+        GenPatch(f, patch_size=patch_size, sigma=sigma, clip=clip, train_val_test=dirname)
+        print("success"+f)
+        return True
+    except Exception as e:
+        print(f"Error processing file {f}: {e}")
+        return False
 
 if __name__ == '__main__':
     sigma = 0.01
     clip = 0.01
     patch_size = 50
 
-    for dirname in ['train', 'test', 'validation']:
-        file_list = glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../abc_data/noise_sigma{}clip{}/xyz/{}/*.xyz'.format(sigma, clip, dirname)))
+    for dirname in ['test', 'validation', 'train']:
+        file_list = glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), '../simulateRoof_data/noise_sigma{}clip{}/xyz/{}/*.xyz'.format(sigma, clip, dirname)))
         file_list.sort()
 
-        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../abc_data/patches_{}_noise_sigma{}clip{}/{}'.format(patch_size, sigma, clip, dirname))
+        base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../simulateRoof_data/patches_{}_noise_sigma{}clip{}/{}'.format(patch_size, sigma, clip, dirname))
         if os.path.exists(base_dir):
             shutil.rmtree(base_dir)
         os.makedirs(base_dir)

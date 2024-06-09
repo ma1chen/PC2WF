@@ -115,6 +115,7 @@ class PointcloudDataset(Dataset):
 
 def train(data_path, patch_size=50, mini_batch=512, nms_th=0.05, line_positive_th=0.05, line_negative_th=0.10, loss_weight=[1.0, 1.0, 1.0], sigma=0.01, clip=0.02):
   n_epoch = 20
+  # 是否从上次训练中恢复
   recover_from_last_train = False
 
   if not os.path.exists(f'./checkpoint_sigma{sigma}clip{clip}'):
@@ -126,6 +127,7 @@ def train(data_path, patch_size=50, mini_batch=512, nms_th=0.05, line_positive_t
   log_f = open('./logs/log_patchSize{}_miniBatch{}_nmsTh{}_linePosTh{}_lineNegTh{}_lossweightP{}V{}L{}_sigma{}clip{}_{}.txt'.format(
     patch_size, mini_batch, nms_th, line_positive_th, line_negative_th, loss_weight[0], loss_weight[1], loss_weight[2], sigma, clip, datetime.now().strftime("%Y%m%d_%H%M%S")), 'w')
 
+  # 加载 ResUNetBN2C-32feat.pth 检查点
   checkpoint = torch.load('ResUNetBN2C-32feat.pth')
   device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
   
@@ -168,7 +170,9 @@ def train(data_path, patch_size=50, mini_batch=512, nms_th=0.05, line_positive_t
   criterion_line = nn.BCEWithLogitsLoss().cuda()
 
   # train parameters
+  # 定义优化器：Adam
   optimizer = optim.Adam(list(backbone_net.parameters())+list(patch_net.parameters())+list(vertex_net.parameters())+list(line_net.parameters()), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-04)
+  # 定义学习率调度器：StepLR
   scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
   LEARNING_RATE_CLIP = 1e-5
 
@@ -180,6 +184,7 @@ def train(data_path, patch_size=50, mini_batch=512, nms_th=0.05, line_positive_t
   val_dataset = PointcloudDataset(os.path.join(data_path, f'patches_{patch_size}_noise_sigma{sigma}clip{clip}', 'validation'))
   val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=0)
 
+  # 设置最佳验证损失、准确率和召回率
   best_val_loss = 100.0
   best_val_acc = 0
   best_val_recall = 0
@@ -192,7 +197,7 @@ def train(data_path, patch_size=50, mini_batch=512, nms_th=0.05, line_positive_t
     
 
     ''' ---begin: training---'''
-    # 初始化累计变量，用于累积损失和评价指标，以便后续计算平均值。
+    # 初始化累计变量，用于累积损失和评价指标，以便在每个epoch结束时计算平均值。
     total_loss = 0.0
     total_loss_patch = 0.0
     total_acc_patch = 0.0
@@ -204,331 +209,378 @@ def train(data_path, patch_size=50, mini_batch=512, nms_th=0.05, line_positive_t
     total_precision_line = 0.0
     total_recall_line = 0.0
     total = 0
+    # 使用tqdm进度条来遍历训练数据加载器。
     for train_loader_i, data in enumerate(tqdm(train_loader)):
-      # load train data
-      # 加载并预处理训练数据，并通过backbone_net提取特征
-      pc_down, feats, coords, patch_other_index, patch_vert_index, patch_vert_gt, mini_line = data
-      pc_down, feats, coords, patch_other_index, patch_vert_index, patch_vert_gt, mini_line = pc_down[0], feats[0], coords[0], patch_other_index[0], patch_vert_index[0], patch_vert_gt[0], mini_line[0]
-      pc_down = pc_down.to(device)
-
-      # Debug information
-      # print("pc_down shape:", pc_down.shape)
-      # print("feats shape:", feats.shape)
-      # print("coords shape:", coords.shape)
-      # print("patch_other_index shape:", patch_other_index.shape)
-      # print("patch_vert_index shape:", patch_vert_index.shape)
-      # print("patch_vert_gt shape:", patch_vert_gt.shape)
-      # print("mini_line shape:", mini_line.shape)
-
       try:
-        if len(patch_other_index) == 0 or len(patch_vert_index) == 0:
+        # load train data
+        # 加载并预处理训练数据，并通过backbone_net提取特征
+        pc_down, feats, coords, patch_other_index, patch_vert_index, patch_vert_gt, mini_line = data
+        pc_down, feats, coords, patch_other_index, patch_vert_index, patch_vert_gt, mini_line = pc_down[0], feats[0], coords[0], patch_other_index[0], patch_vert_index[0], patch_vert_gt[0], mini_line[0]
+        pc_down = pc_down.to(device)
+
+        # Debug information
+        # print("pc_down shape:", pc_down.shape)
+        # print("feats shape:", feats.shape)
+        # print("coords shape:", coords.shape)
+        # print("patch_other_index shape:", patch_other_index.shape)
+        # print("patch_vert_index shape:", patch_vert_index.shape)
+        # print("patch_vert_gt shape:", patch_vert_gt.shape)
+        # print("mini_line shape:", mini_line.shape)
+
+        try:
+          if len(patch_other_index) == 0 or len(patch_vert_index)==0 or len(mini_line)== 0:
+            continue
+        except:
           continue
-      except:
-        continue
-      # extract features from backbone_net
-      # stensor = ME.SparseTensor(feats, coords=coords).to(device)
-      
-      # 将 feats 和 coords 移动到device
-      feats = torch.Tensor(feats).to(device)
-      coords = torch.Tensor(coords).to(device)
-      # 创建 CoordinateManager
-      dimension_of_coords = coords.shape[1]
-      coordinate_manager = ME.CoordinateManager(D=3)
-      stensor = ME.SparseTensor(features=feats, coordinates=coords,coordinate_manager=coordinate_manager)
-      stensor.C.to(device)
-      stensor.F.to(device)
-
-      features = backbone_net(stensor).F
-
-      # 将特征、坐标和标签按照正负样本进行分类并存储。
-      # mini_features: features of each patch, of size num_patches x points_per_patch x 32, e.g., 20 x 32.
-      # mini_coords: coords of each patch, of size num_patches x points_per_patch x 3, e.g., 20 x 3.
-      # mini_labels: labels of each patch, of size num_patches x points_per_patch x 1, e.g., 20 x 1.
-      # mini_verts: vertex index of each positive patch, of size num_positive_patches x 1, note that num_positive_patches+num_negative_patches=num_patches
-      # mini_verts_gt: vertex gt coord of each patch, of size num_patches x 3, note that num_positive_patches+num_negative_patches=num_patches
-      mini_features = []
-      mini_coords = []
-      mini_labels = []
-      mini_verts_gt = []
-      for i, index in enumerate(patch_vert_index):
-        # print("index:"+str(index.long()))
-        # print(pc_down[index.long()])
-        # print(features[index.long()])
-        # print(features)
-        mini_features.append(features[index.long()])
-        mini_coords.append(pc_down[index.long()])
+        # extract features from backbone_net
+        # stensor = ME.SparseTensor(feats, coords=coords).to(device)
         
-        mini_labels.append(torch.ones((1,)).long())
-        mini_verts_gt.append(patch_vert_gt[i])
+        # 将 feats 和 coords 移动到device
+        feats = torch.Tensor(feats).to(device)
+        coords = torch.Tensor(coords).to(device)
+        # 创建 CoordinateManager
+        dimension_of_coords = coords.shape[1]
+        coordinate_manager = ME.CoordinateManager(D=3)
+        stensor = ME.SparseTensor(features=feats, coordinates=coords,coordinate_manager=coordinate_manager)
+        stensor.C.to(device)
+        stensor.F.to(device)
 
-      for i, index in enumerate(patch_other_index):
-        mini_features.append(features[index.long()])
-        curr_coords = pc_down[index.long()]
-        mini_coords.append(curr_coords)
-        
-        mini_labels.append(torch.zeros((1,)).long())
-        mini_verts_gt.append(torch.zeros((3,)))
+        features = backbone_net(stensor).F
 
-      # 构建线段特征，并将其分类为正样本和负样本。      
-      # static_positive_line_*: static and positive lines
-      # static_negative_line_*: static and negative lines
-      line_features = []
-      line_labels = []
-      static_positive_line_coords = [] # coords of two vertices of a line
-      static_positive_line_patches = [] # which patches does a line belong to ?
-      static_positive_num = 0
-      static_negative_line_coords = [] # coords of two vertices of a line
-      static_negative_line_patches = [] # which patches does a line belong to ?
-      static_negative_num = 0
-      for i_line, edge in enumerate(mini_line):
-        tmp_line_feature = []
-        for l in edge[:-1]:
-          tmp_line_feature.append(features[l])
-        line_features.append(torch.stack(tmp_line_feature))
-        if edge[-1] == 1:
-          line_labels.append(torch.ones((1,)).long())
-          tmp_edge_0_patches = [i_patch for i_patch in range(len(patch_vert_index)) if edge[0] in patch_vert_index[i_patch]]
-          tmp_edge_1_patches = [i_patch for i_patch in range(len(patch_vert_index)) if edge[-2] in patch_vert_index[i_patch]]
-          random.shuffle(tmp_edge_0_patches)
-          random.shuffle(tmp_edge_1_patches)
-          for tmp_0_patch in tmp_edge_0_patches:
-            for tmp_1_patch in tmp_edge_1_patches:
-                static_positive_num += 1
-                static_positive_line_patches.append([tmp_0_patch, tmp_1_patch])
-                static_positive_line_coords.append([pc_down[edge[0].long()], pc_down[edge[-2].long()]])
-        else:
-          line_labels.append(torch.zeros((1,)).long())
-          tmp_edge_0_patches = [i_patch for i_patch in range(len(patch_vert_index)) if edge[0] in patch_vert_index[i_patch]]
-          tmp_edge_1_patches = [i_patch for i_patch in range(len(patch_vert_index)) if edge[-2] in patch_vert_index[i_patch]]
-          random.shuffle(tmp_edge_0_patches)
-          random.shuffle(tmp_edge_1_patches)
-          for tmp_0_patch in tmp_edge_0_patches:
-            for tmp_1_patch in tmp_edge_1_patches:
-                static_negative_num += 1
-                static_negative_line_patches.append([tmp_0_patch, tmp_1_patch])
-                static_negative_line_coords.append([pc_down[edge[0].long()], pc_down[edge[-2].long()]])
-        
+        # 将特征、坐标和标签按照正负样本进行分类并存储。
+        # mini_features: features of each patch, of size num_patches x points_per_patch x 32, e.g., 20 x 32.
+        # mini_coords: coords of each patch, of size num_patches x points_per_patch x 3, e.g., 20 x 3.
+        # mini_labels: labels of each patch, of size num_patches x points_per_patch x 1, e.g., 20 x 1.
+        # mini_verts: vertex index of each positive patch, of size num_positive_patches x 1, note that num_positive_patches+num_negative_patches=num_patches
+        # mini_verts_gt: vertex gt coord of each patch, of size num_patches x 3, note that num_positive_patches+num_negative_patches=num_patches
+        mini_features = []
+        mini_coords = []
+        mini_labels = []
+        mini_verts_gt = []
+        # 遍历patch_vert_index，提取每个补丁的特征和坐标，并将其存储在mini_features和mini_coords中。
+        # 正样本补丁的标签设置为1，顶点的真实坐标存储在mini_verts_gt中。
+        for i, index in enumerate(patch_vert_index):
+          if torch.any(index >= pc_down.shape[0]) or torch.any(index < 0):
+            print(f"Invalid index in patch_vert_index at iteration {i}: {index}")
+            continue
+          mini_features.append(features[index.long()])
+          mini_coords.append(pc_down[index.long()])
+          
+          mini_labels.append(torch.ones((1,)).long())
+          mini_verts_gt.append(patch_vert_gt[i])
 
-      '''train patches from one point cloud'''
-      mini_loss = 0.0
-      mini_loss_patch = 0.0
-      mini_loss_vertex = 0.0
-      mini_loss_line = 0.0
-      mini_acc_patch = 0
-      mini_TP_patch = 0
-      mini_TN_patch = 0
-      mini_FP_patch = 0
-      mini_FN_patch = 0
-      mini_acc_line = 0
-      mini_TP_line = 0
-      mini_TN_line = 0
-      mini_FP_line = 0
-      mini_FN_line = 0
+        # 遍历patch_other_index，提取负样本补丁的特征和坐标，并将其存储在mini_features和mini_coords中。
+        # 负样本补丁的标签设置为0，顶点的真实坐标为零。
+        for i, index in enumerate(patch_other_index):
+          if torch.any(index >= pc_down.shape[0]) or torch.any(index < 0):
+            print(f"Invalid index in patch_other_index at iteration {i}: {index}")
+            continue
+          mini_features.append(features[index.long()])
+          curr_coords = pc_down[index.long()]
+          mini_coords.append(curr_coords)
+          
+          mini_labels.append(torch.zeros((1,)).long())
+          mini_verts_gt.append(torch.zeros((3,)))
 
-      # store correctly predicted vertex
-      predicted_vertex_coords = []
-      predicted_vertex_probs = []
-      # store index of vertex gt of predicted vertex
-      true_positive_ids = []
-
-      all_ids = list(range(0, len(mini_features)))
-      random.shuffle(all_ids)
-      for batch_id_start in range(0, len(all_ids), mini_batch):
-        # select batch
-        batch_ids = all_ids[batch_id_start : batch_id_start+mini_batch]
-        # features of selected batch, of size batch_size x points_per_patch x 32
-        batch_features = torch.cat([mini_features[i].unsqueeze(0) for i in batch_ids], 0).cuda()
-        # coords of selected batch, of size batch_size x points_per_patch x 3
-        batch_coords = torch.cat([mini_coords[i].unsqueeze(0) for i in batch_ids], 0).cuda()
-
-        # vert_gt_delta coords of selected batch, of size batch_size x 3
-        batch_vert_gt = torch.cat([mini_verts_gt[i].unsqueeze(0) for i in batch_ids], 0).cuda()
-
-        '''for patch_net'''
-        # input of patch_net, of size batch_size x 35 x points_per_patch, e.g., 2048x35x20
-        batch_input_patch = torch.cat([batch_coords, batch_features], 2).transpose(1, 2)
-        # labels of selected batch, of size batch_size x 1
-        batch_label_patch = torch.cat([mini_labels[i].unsqueeze(0) for i in batch_ids], 0).float().squeeze().cuda()
-
-        # batch_input_patch是输入的点云补丁特征。
-        # batch_output_patch是模型的输出。
-        # batch_label_patch是实际的标签，表示补丁是否属于目标类别。
-        batch_output_patch = patch_net(batch_input_patch)
-
-        # criterion_patch计算预测值和真实值之间的二分类交叉熵损失，并累加到mini_loss_patch中。
-        mini_loss_patch += criterion_patch(batch_output_patch.squeeze(), batch_label_patch)
-
-        # acc, TP, TN, FP, FN
-        batch_label_patch = batch_label_patch.long()
-        predicted = (torch.sigmoid(batch_output_patch.squeeze())>=0.5).long()
-        mini_acc_patch += int((predicted == batch_label_patch).sum().item())
-
-        predicted, batch_label = predicted.cpu().numpy(), batch_label_patch.cpu().numpy()
-        mini_TP_patch += int((predicted & batch_label).sum())
-        mini_TN_patch += int(((~predicted+2) & (~batch_label+2)).sum())
-        mini_FP_patch += int(((predicted) & (~batch_label+2)).sum())
-        mini_FN_patch += int(((~predicted+2) & (batch_label)).sum())
-
-        '''for vertex_net'''
-        # index of true_positive patches
-        batch_output_label_patch = (torch.sigmoid(batch_output_patch.squeeze())>=0.5).long()
-        batch_output_prob_patch = torch.sigmoid(batch_output_patch.squeeze())
-        true_positive_patches = (batch_output_label_patch & batch_label_patch).data.cpu().numpy()==1
-        # input of vertex_net, of size #true_positive_patches x 35 x points_per_patch, e.g., 40x35x20
-        batch_input_vertex = torch.cat([batch_coords[true_positive_patches], batch_features[true_positive_patches]], 2).transpose(1, 2)
-        # labels
-        batch_label_vertex = batch_vert_gt[true_positive_patches]
-        batch_prob_vertex = batch_output_prob_patch[true_positive_patches]
-        if len(batch_input_vertex) <= 1:
-          continue
-        
-        batch_output_vertex = vertex_net(batch_input_vertex)
-        mini_loss_vertex += criterion_vertex(batch_output_vertex, batch_label_vertex)
-
-        # results of vertexNet, used in lineNet
-        batch_output_vertex_coord = batch_output_vertex
-        predicted_vertex_coords.extend(batch_output_vertex_coord)
-        predicted_vertex_probs.extend(batch_prob_vertex)
-        true_positive_ids.extend(np.array(batch_ids)[true_positive_patches])
-
-      '''for line_net'''
-      # NMS to filter vertices that close
-      nms_threshhold = nms_th
-      dropped_vertex_index = []
-      predicted_vertex_coords = torch.stack(predicted_vertex_coords) if len(predicted_vertex_coords) != 0 else torch.Tensor([])
-      for i in range(len(predicted_vertex_coords)):
-          if i in dropped_vertex_index:
-              continue
-          dist_all = torch.norm(predicted_vertex_coords-predicted_vertex_coords[i], dim=1)
-          same_region_indexes = (dist_all < nms_threshhold).nonzero()
-          for same_region_i in same_region_indexes[0]:
-              if same_region_i == i:
-                  continue
-              if predicted_vertex_probs[same_region_i] <= predicted_vertex_probs[i]:
-                  dropped_vertex_index.append(same_region_i)
-              else:
-                  dropped_vertex_index.append(i)
-      selected_vertex_index = [i for i in range(len(predicted_vertex_coords)) if i not in dropped_vertex_index]
-      predicted_vertex_coords = predicted_vertex_coords[selected_vertex_index]
-      true_positive_ids = np.array(true_positive_ids)[selected_vertex_index].tolist()
-
-      # dynamic line samples
-      dynamic_positive_num = 0
-      dynamic_negative_num = 0
-      predicted_vertex_features = []
-      for coord in predicted_vertex_coords:
-        pred_vertex_index = torch.argmin(torch.norm(pc_down - coord, dim=1))
-        predicted_vertex_features.append(features[pred_vertex_index])
-      # add dynamic samples, th_p for positive threshhold, th_n for negative threshhold
-      point_num_in_line = 30
-      th_p = line_positive_th
-      th_n = line_negative_th
-      for i, positive_patches in enumerate(static_positive_line_patches):
-        if (positive_patches[0] in true_positive_ids) and (positive_patches[1] in true_positive_ids):
-          dynamic_positive_line_feature = []
-          predicted_e1, predicted_e2 = predicted_vertex_coords[true_positive_ids.index(positive_patches[0])], predicted_vertex_coords[true_positive_ids.index(positive_patches[1])]
-          gt_e1, gt_e2 = static_positive_line_coords[i]
-          d1, d2 = torch.norm(predicted_e1-gt_e1), torch.norm(predicted_e2-gt_e2)
-          if d1 <= th_p and d2 <= th_p:
-              # dynamic positive sample
-              line_labels.append(torch.ones((1,)).long())
-              dynamic_positive_num += 1
-              e1_coord, e2_coord = predicted_e1, predicted_e2
-              e1_feature, e2_feature = predicted_vertex_features[true_positive_ids.index(positive_patches[0])], predicted_vertex_features[true_positive_ids.index(positive_patches[1])]
-          elif d1 >= th_n or d2 >= th_n:
-              # dynamic negative sample
-              line_labels.append(torch.zeros((1,)).long())
-              dynamic_negative_num += 1
-              e1_coord, e2_coord = predicted_e1, predicted_e2
-              e1_feature, e2_feature = predicted_vertex_features[true_positive_ids.index(positive_patches[0])], predicted_vertex_features[true_positive_ids.index(positive_patches[1])]
+        # 构建线段特征，并将其分类为正样本和负样本。      
+        # static_positive_line_*: static and positive lines
+        # static_negative_line_*: static and negative lines
+        line_features = []
+        line_labels = []
+        static_positive_line_coords = [] # coords of two vertices of a line
+        static_positive_line_patches = [] # which patches does a line belong to ?
+        static_positive_num = 0
+        static_negative_line_coords = [] # coords of two vertices of a line
+        static_negative_line_patches = [] # which patches does a line belong to ?
+        static_negative_num = 0
+        # 遍历mini_line，提取每条线段的特征并存储在line_features中。
+        # 正样本线段的标签设置为1，负样本线段的标签设置为0。正样本和负样本线段的坐标和补丁索引分别存储在相应的变量中。
+        for i_line, edge in enumerate(mini_line):
+          # 初始化一个临时列表 tmp_line_feature，用于存储当前线段的特征。
+          tmp_line_feature = []
+          # 遍历 edge 中除最后一个元素（标签）外的所有顶点索引，从 features 中提取相应顶点的特征，并添加到 tmp_line_feature 中。
+          for l in edge[:-1]:
+            tmp_line_feature.append(features[l])
+          # 将 tmp_line_feature 堆叠成一个张量，并添加到 line_features 中
+          line_features.append(torch.stack(tmp_line_feature))
+          if edge[-1] == 1:
+            line_labels.append(torch.ones((1,)).long())
+            # 找出包含 edge[0] 的所有补丁索引，存储在 tmp_edge_0_patches 中。
+            tmp_edge_0_patches = [i_patch for i_patch in range(len(patch_vert_index)) if edge[0] in patch_vert_index[i_patch]]
+            # 找出包含 edge[-2] 的所有补丁索引，存储在 tmp_edge_1_patches 中。
+            tmp_edge_1_patches = [i_patch for i_patch in range(len(patch_vert_index)) if edge[-2] in patch_vert_index[i_patch]]
+            # 随机打乱这些补丁索引，以确保训练的随机性。
+            random.shuffle(tmp_edge_0_patches)
+            random.shuffle(tmp_edge_1_patches)
+            # 遍历这两个列表中的所有补丁索引组合，并执行以下操作：
+            for tmp_0_patch in tmp_edge_0_patches:
+              for tmp_1_patch in tmp_edge_1_patches:
+                  # 增加正样本线段计数 static_positive_num
+                  static_positive_num += 1
+                  # 将补丁索引对添加到 static_positive_line_patches 中。
+                  static_positive_line_patches.append([tmp_0_patch, tmp_1_patch])
+                  # 将线段的两个顶点坐标添加到 static_positive_line_coords 中
+                  static_positive_line_coords.append([pc_down[edge[0].long()], pc_down[edge[-2].long()]])
+          # 如果 edge[-1] == 0，表示这是一个负样本线段：
           else:
-              continue
-          dynamic_positive_line_feature.append(e1_feature)
-          for inter_point in range(1, point_num_in_line+1):
-              inter_point_coord = (float(inter_point)/(point_num_in_line+1)*e1_coord + (1-float(inter_point)/(point_num_in_line+1))*e2_coord)
-              inter_point_index = torch.argmin(torch.norm(pc_down - inter_point_coord, dim=1))
-              dynamic_positive_line_feature.append(features[inter_point_index])
-          dynamic_positive_line_feature.append(e2_feature)
-          line_features.append(torch.stack(dynamic_positive_line_feature))
-      # add dynamic negative samples
-      point_num_in_line = 30
-      for i, negative_patches in enumerate(static_negative_line_patches):
-        if (negative_patches[0] in true_positive_ids) and (negative_patches[1] in true_positive_ids):
-          dynamic_negative_line_feature = []
-          e1_coord, e2_coord = predicted_vertex_features[true_positive_ids.index(negative_patches[0])][:3], predicted_vertex_features[true_positive_ids.index(negative_patches[1])][:3]
-          dynamic_negative_line_feature.append(predicted_vertex_features[true_positive_ids.index(negative_patches[0])])
-          for inter_point in range(1, point_num_in_line+1):
-              inter_point_coord = (float(inter_point)/(point_num_in_line+1)*e1_coord + (1-float(inter_point)/(point_num_in_line+1))*e2_coord)
-              inter_point_index = torch.argmin(torch.norm(pc_down - inter_point_coord, dim=1))
-              dynamic_negative_line_feature.append(features[inter_point_index])
-          dynamic_negative_line_feature.append(predicted_vertex_features[true_positive_ids.index(negative_patches[1])])
-          line_features.append(torch.stack(dynamic_negative_line_feature))
-          line_labels.append(torch.zeros((1,)).long())
-          dynamic_negative_num += 1
-      
-      # train lineNet
-      line_input = torch.stack(line_features).transpose(1, 2)
-      line_labels = torch.stack(line_labels).to(device)
+            line_labels.append(torch.zeros((1,)).long())
+            tmp_edge_0_patches = [i_patch for i_patch in range(len(patch_vert_index)) if edge[0] in patch_vert_index[i_patch]]
+            tmp_edge_1_patches = [i_patch for i_patch in range(len(patch_vert_index)) if edge[-2] in patch_vert_index[i_patch]]
+            random.shuffle(tmp_edge_0_patches)
+            random.shuffle(tmp_edge_1_patches)
+            for tmp_0_patch in tmp_edge_0_patches:
+              for tmp_1_patch in tmp_edge_1_patches:
+                  static_negative_num += 1
+                  static_negative_line_patches.append([tmp_0_patch, tmp_1_patch])
+                  static_negative_line_coords.append([pc_down[edge[0].long()], pc_down[edge[-2].long()]])
+          
 
-      all_line_ids = list(range(0, len(line_labels)))
-      random.shuffle(all_line_ids)
-      for batch_id_start in range(0, len(all_line_ids), mini_batch):
-        batch_ids_line = all_line_ids[batch_id_start : batch_id_start+mini_batch]
-        batch_input_line = line_input[batch_ids_line]
-        batch_output_line = line_net(batch_input_line)
-        batch_labels_line = line_labels[batch_ids_line].squeeze().float()
+        '''train patches from one point cloud'''
+        # mini_loss, mini_loss_patch, mini_loss_vertex, mini_loss_line：用于存储当前小批量的总损失及其各部分（补丁损失、顶点损失、线段损失）
+        mini_loss = 0.0
+        mini_loss_patch = 0.0
+        mini_loss_vertex = 0.0
+        mini_loss_line = 0.0
+        # mini_acc_patch, mini_TP_patch, mini_TN_patch, mini_FP_patch, mini_FN_patch：用于存储补丁分类的准确率、真阳性、真阴性、假阳性、假阴性。
+        mini_acc_patch = 0
+        mini_TP_patch = 0
+        mini_TN_patch = 0
+        mini_FP_patch = 0
+        mini_FN_patch = 0
+        # mini_acc_line, mini_TP_line, mini_TN_line, mini_FP_line, mini_FN_line：用于存储线段分类的准确率、真阳性、真阴性、假阳性、假阴性。
+        mini_acc_line = 0
+        mini_TP_line = 0
+        mini_TN_line = 0
+        mini_FP_line = 0
+        mini_FN_line = 0
+        # store correctly predicted vertex
+        # predicted_vertex_coords：存储正确预测的顶点坐标。
+        # predicted_vertex_probs：存储正确预测的顶点概率。
+        predicted_vertex_coords = []
+        predicted_vertex_probs = []
+        # store index of vertex gt of predicted vertex
+        # # true_positive_ids：存储预测为真阳性的顶点的索引。
+        true_positive_ids = []
 
-        mini_loss_line += criterion_line(batch_output_line.squeeze(), batch_labels_line)
+        # 将 mini_features 的索引按随机顺序排列，以确保训练过程中的随机性和数据的多样性。
+        all_ids = list(range(0, len(mini_features)))
+        random.shuffle(all_ids)
+        # 按 mini_batch 大小，将所有补丁索引分成若干小批量。在每个小批量中：
+        for batch_id_start in range(0, len(all_ids), mini_batch):
+          # select batch
+          batch_ids = all_ids[batch_id_start : batch_id_start+mini_batch]
+          # features of selected batch, of size batch_size x points_per_patch x 32
+          # 从 mini_features 中选取当前小批量的特征，并将其堆叠成一个张量。
+          batch_features = torch.cat([mini_features[i].unsqueeze(0) for i in batch_ids], 0).cuda()
+          # coords of selected batch, of size batch_size x points_per_patch x 3
+          # 从 mini_coords 中选取当前小批量的坐标，并将其堆叠成一个张量。
+          batch_coords = torch.cat([mini_coords[i].unsqueeze(0) for i in batch_ids], 0).cuda()
+          # vert_gt_delta coords of selected batch, of size batch_size x 3
+          # 从 mini_verts_gt 中选取当前小批量的顶点坐标，并将其堆叠成一个张量
+          batch_vert_gt = torch.cat([mini_verts_gt[i].unsqueeze(0) for i in batch_ids], 0).cuda()
 
-        # acc, TP, TN, FP, FN
-        batch_labels_line = batch_labels_line.long()
-        predicted = (torch.sigmoid(batch_output_line.squeeze())>=0.5).long()
-        mini_acc_line += int((predicted == batch_labels_line).sum().item())
+          '''for patch_net'''
+          # input of patch_net, of size batch_size x 35 x points_per_patch, e.g., 2048x35x20
+          # 将 batch_coords 和 batch_features 沿着特征维度（dim=2）拼接起来，然后将维度交换，使得输入的形状为 batch_size x 35 x points_per_patch。
+          batch_input_patch = torch.cat([batch_coords, batch_features], 2).transpose(1, 2)
+          # labels of selected batch, of size batch_size x 1
+          # 选取当前小批量的标签 mini_labels，并将其堆叠成一个张量。
+          batch_label_patch = torch.cat([mini_labels[i].unsqueeze(0) for i in batch_ids], 0).float().squeeze().cuda()
 
-        predicted, batch_labels = predicted.cpu().numpy(), batch_labels_line.cpu().numpy()
-        mini_TP_line += int((predicted & batch_labels).sum())
-        mini_TN_line += int(((~predicted+2) & (~batch_labels+2)).sum())
-        mini_FP_line += int(((predicted) & (~batch_labels+2)).sum())
-        mini_FN_line += int(((~predicted+2) & (batch_labels)).sum())
+          # batch_input_patch是输入的点云补丁特征。
+          # batch_output_patch是模型的输出。
+          # batch_label_patch是实际的标签，表示补丁是否属于目标类别。
+          batch_output_patch = patch_net(batch_input_patch)
 
-      '''for updating'''
-      # 训练过程中的损失计算和优化
-      # loss_weight是每个子网络损失的权重。
-      loss = loss_weight[0]*mini_loss_patch + loss_weight[1]*mini_loss_vertex + loss_weight[2]*mini_loss_line
+          # criterion_patch计算预测值和真实值之间的二分类交叉熵损失，并累加到mini_loss_patch中。
+          mini_loss_patch += criterion_patch(batch_output_patch.squeeze(), batch_label_patch)
 
-      # optimizer.zero_grad()清除梯度。
-      optimizer.zero_grad()
-      # loss.backward(retain_graph=True)计算梯度。
-      loss.backward(retain_graph=True)
-      # optimizer.step()更新模型参数。
-      optimizer.step()
+          # acc, TP, TN, FP, FN
+          batch_label_patch = batch_label_patch.long()
+          # 对预测结果应用 sigmoid 激活函数，将其转换为概率，然后将概率大于等于0.5的部分转换为1（即正样本），其余转换为0（即负样本）。
+          predicted = (torch.sigmoid(batch_output_patch.squeeze())>=0.5).long()
+          # 计算并累加当前小批量的准确率、真阳性、真阴性、假阳性、假阴性。
+          mini_acc_patch += int((predicted == batch_label_patch).sum().item())
+          predicted, batch_label = predicted.cpu().numpy(), batch_label_patch.cpu().numpy()
+          mini_TP_patch += int((predicted & batch_label).sum())
+          mini_TN_patch += int(((~predicted+2) & (~batch_label+2)).sum())
+          mini_FP_patch += int(((predicted) & (~batch_label+2)).sum())
+          mini_FN_patch += int(((~predicted+2) & (batch_label)).sum())
 
-      mini_acc_patch = mini_acc_patch / len(all_ids)
-      mini_precision_patch = mini_TP_patch / (mini_TP_patch + mini_FP_patch + 1e-12)
-      mini_recall_patch = mini_TP_patch / (mini_TP_patch + mini_FN_patch + 1e-12)
+          '''for vertex_net'''
+          # index of true_positive patches
+          # batch_output_label_patch：对 PatchNet 的输出应用 sigmoid 激活函数，将其转换为概率，然后将概率大于等于0.5的部分转换为1（即正样本），其余转换为0（即负样本）。
+          batch_output_label_patch = (torch.sigmoid(batch_output_patch.squeeze())>=0.5).long()
+          # batch_output_prob_patch：对 PatchNet 的输出应用 sigmoid 激活函数，将其转换为概率。
+          batch_output_prob_patch = torch.sigmoid(batch_output_patch.squeeze())
+          # true_positive_patches：计算预测值和真实值的逻辑与操作，找出预测为真阳性的补丁。
+          true_positive_patches = (batch_output_label_patch & batch_label_patch).data.cpu().numpy()==1
+          # input of vertex_net, of size #true_positive_patches x 35 x points_per_patch, e.g., 40x35x20
+          # batch_input_vertex：将真阳性补丁的坐标和特征拼接起来，形成 VertexNet 的输入。输入的形状为:true_positive_patches x 35 x points_per_patch。
+          batch_input_vertex = torch.cat([batch_coords[true_positive_patches], batch_features[true_positive_patches]], 2).transpose(1, 2)
+          # labels
+          # batch_label_vertex：获取真阳性补丁的顶点坐标标签。
+          batch_label_vertex = batch_vert_gt[true_positive_patches]
+          # batch_prob_vertex：获取真阳性补丁的概率。
+          batch_prob_vertex = batch_output_prob_patch[true_positive_patches]
+          if len(batch_input_vertex) <= 1:
+            continue
+          # batch_output_vertex：将 batch_input_vertex 输入到 vertex_net 中，得到输出顶点坐标。
+          batch_output_vertex = vertex_net(batch_input_vertex)
+          # 使用均方误差损失函数 criterion_vertex 计算预测顶点坐标和真实顶点坐标之间的损失，并累加到 mini_loss_vertex 中。
+          mini_loss_vertex += criterion_vertex(batch_output_vertex, batch_label_vertex)
 
-      mini_acc_line = mini_acc_line / len(line_labels)
-      mini_precision_line = mini_TP_line / (mini_TP_line + mini_FP_line + 1e-12)
-      mini_recall_line = mini_TP_line / (mini_TP_line + mini_FN_line + 1e-12)
+          # results of vertexNet, used in lineNet
+          # batch_output_vertex_coord：存储 vertex_net 的输出顶点坐标
+          batch_output_vertex_coord = batch_output_vertex
+          # predicted_vertex_coords：将预测的顶点坐标添加到 predicted_vertex_coords 中。
+          predicted_vertex_coords.extend(batch_output_vertex_coord)
+          # predicted_vertex_probs：将预测的顶点概率添加到 predicted_vertex_probs 中。
+          predicted_vertex_probs.extend(batch_prob_vertex)
+          # true_positive_ids：将真阳性补丁的索引添加到 true_positive_ids 中。
+          true_positive_ids.extend(np.array(batch_ids)[true_positive_patches])
 
-      total_loss += float(loss)
-      total_loss_patch += float(mini_loss_patch)
-      total_acc_patch += float(mini_acc_patch)
-      total_precision_patch += float(mini_precision_patch)
-      total_recall_patch += float(mini_recall_patch)
-      total_loss_vertex += float(mini_loss_vertex)
-      total_loss_line += float(mini_loss_line)
-      total_acc_line += float(mini_acc_line)
-      total_precision_line += float(mini_precision_line)
-      total_recall_line += float(mini_recall_line)
-      total += 1
-      print('Epoch %d: Obj: %d loss: %f loss_patch: %f loss_vertex: %f loss_line: %f acc_patch: %f precision_patch: %f recall_patch: %f acc_line: %f precision_line: %f recall_line: %f lr: %f' % (
-        epoch, train_loader_i, total_loss/total, total_loss_patch/total, total_loss_vertex/total, total_loss_line/total,
-        total_acc_patch/total, total_precision_patch/total, total_recall_patch/total,
-        total_acc_line/total, total_precision_line/total, total_recall_line/total, lr))
-      print('static_positive_num: {}, static_negative_num: {}, dynamic_positive_num: {}, dynamic_negative_num: {}'.format(
-        static_positive_num, static_negative_num, dynamic_positive_num, dynamic_negative_num
-      ))
+        '''for line_net'''
+        # NMS to filter vertices that close
+        nms_threshhold = nms_th
+        dropped_vertex_index = []
+        predicted_vertex_coords = torch.stack(predicted_vertex_coords) if len(predicted_vertex_coords) != 0 else torch.Tensor([])
+        for i in range(len(predicted_vertex_coords)):
+            if i in dropped_vertex_index:
+                continue
+            dist_all = torch.norm(predicted_vertex_coords-predicted_vertex_coords[i], dim=1)
+            same_region_indexes = (dist_all < nms_threshhold).nonzero()
+            for same_region_i in same_region_indexes[0]:
+                if same_region_i == i:
+                    continue
+                if predicted_vertex_probs[same_region_i] <= predicted_vertex_probs[i]:
+                    dropped_vertex_index.append(same_region_i)
+                else:
+                    dropped_vertex_index.append(i)
+        selected_vertex_index = [i for i in range(len(predicted_vertex_coords)) if i not in dropped_vertex_index]
+        predicted_vertex_coords = predicted_vertex_coords[selected_vertex_index]
+        true_positive_ids = np.array(true_positive_ids)[selected_vertex_index].tolist()
+
+        # dynamic line samples
+        dynamic_positive_num = 0
+        dynamic_negative_num = 0
+        predicted_vertex_features = []
+        for coord in predicted_vertex_coords:
+          pred_vertex_index = torch.argmin(torch.norm(pc_down - coord, dim=1))
+          predicted_vertex_features.append(features[pred_vertex_index])
+        # add dynamic samples, th_p for positive threshhold, th_n for negative threshhold
+        point_num_in_line = 30
+        th_p = line_positive_th
+        th_n = line_negative_th
+        for i, positive_patches in enumerate(static_positive_line_patches):
+          if (positive_patches[0] in true_positive_ids) and (positive_patches[1] in true_positive_ids):
+            dynamic_positive_line_feature = []
+            predicted_e1, predicted_e2 = predicted_vertex_coords[true_positive_ids.index(positive_patches[0])], predicted_vertex_coords[true_positive_ids.index(positive_patches[1])]
+            gt_e1, gt_e2 = static_positive_line_coords[i]
+            d1, d2 = torch.norm(predicted_e1-gt_e1), torch.norm(predicted_e2-gt_e2)
+            if d1 <= th_p and d2 <= th_p:
+                # dynamic positive sample
+                line_labels.append(torch.ones((1,)).long())
+                dynamic_positive_num += 1
+                e1_coord, e2_coord = predicted_e1, predicted_e2
+                e1_feature, e2_feature = predicted_vertex_features[true_positive_ids.index(positive_patches[0])], predicted_vertex_features[true_positive_ids.index(positive_patches[1])]
+            elif d1 >= th_n or d2 >= th_n:
+                # dynamic negative sample
+                line_labels.append(torch.zeros((1,)).long())
+                dynamic_negative_num += 1
+                e1_coord, e2_coord = predicted_e1, predicted_e2
+                e1_feature, e2_feature = predicted_vertex_features[true_positive_ids.index(positive_patches[0])], predicted_vertex_features[true_positive_ids.index(positive_patches[1])]
+            else:
+                continue
+            dynamic_positive_line_feature.append(e1_feature)
+            for inter_point in range(1, point_num_in_line+1):
+                inter_point_coord = (float(inter_point)/(point_num_in_line+1)*e1_coord + (1-float(inter_point)/(point_num_in_line+1))*e2_coord)
+                inter_point_index = torch.argmin(torch.norm(pc_down - inter_point_coord, dim=1))
+                dynamic_positive_line_feature.append(features[inter_point_index])
+            dynamic_positive_line_feature.append(e2_feature)
+            line_features.append(torch.stack(dynamic_positive_line_feature))
+        # add dynamic negative samples
+        point_num_in_line = 30
+        for i, negative_patches in enumerate(static_negative_line_patches):
+          if (negative_patches[0] in true_positive_ids) and (negative_patches[1] in true_positive_ids):
+            dynamic_negative_line_feature = []
+            e1_coord, e2_coord = predicted_vertex_features[true_positive_ids.index(negative_patches[0])][:3], predicted_vertex_features[true_positive_ids.index(negative_patches[1])][:3]
+            dynamic_negative_line_feature.append(predicted_vertex_features[true_positive_ids.index(negative_patches[0])])
+            for inter_point in range(1, point_num_in_line+1):
+                inter_point_coord = (float(inter_point)/(point_num_in_line+1)*e1_coord + (1-float(inter_point)/(point_num_in_line+1))*e2_coord)
+                inter_point_index = torch.argmin(torch.norm(pc_down - inter_point_coord, dim=1))
+                dynamic_negative_line_feature.append(features[inter_point_index])
+            dynamic_negative_line_feature.append(predicted_vertex_features[true_positive_ids.index(negative_patches[1])])
+            line_features.append(torch.stack(dynamic_negative_line_feature))
+            line_labels.append(torch.zeros((1,)).long())
+            dynamic_negative_num += 1
+        
+        # train lineNet
+        line_input = torch.stack(line_features).transpose(1, 2)
+        line_labels = torch.stack(line_labels).to(device)
+
+        all_line_ids = list(range(0, len(line_labels)))
+        random.shuffle(all_line_ids)
+        for batch_id_start in range(0, len(all_line_ids), mini_batch):
+          batch_ids_line = all_line_ids[batch_id_start : batch_id_start+mini_batch]
+          batch_input_line = line_input[batch_ids_line]
+          batch_output_line = line_net(batch_input_line)
+          batch_labels_line = line_labels[batch_ids_line].squeeze().float()
+
+          mini_loss_line += criterion_line(batch_output_line.squeeze(), batch_labels_line)
+
+          # acc, TP, TN, FP, FN
+          batch_labels_line = batch_labels_line.long()
+          predicted = (torch.sigmoid(batch_output_line.squeeze())>=0.5).long()
+          mini_acc_line += int((predicted == batch_labels_line).sum().item())
+
+          predicted, batch_labels = predicted.cpu().numpy(), batch_labels_line.cpu().numpy()
+          mini_TP_line += int((predicted & batch_labels).sum())
+          mini_TN_line += int(((~predicted+2) & (~batch_labels+2)).sum())
+          mini_FP_line += int(((predicted) & (~batch_labels+2)).sum())
+          mini_FN_line += int(((~predicted+2) & (batch_labels)).sum())
+
+        '''for updating'''
+        # 训练过程中的损失计算和优化
+        # loss_weight是每个子网络损失的权重。
+        loss = loss_weight[0]*mini_loss_patch + loss_weight[1]*mini_loss_vertex + loss_weight[2]*mini_loss_line
+
+        # optimizer.zero_grad()清除梯度。
+        optimizer.zero_grad()
+        # loss.backward(retain_graph=True)计算梯度。
+        loss.backward(retain_graph=True)
+        # optimizer.step()更新模型参数。
+        optimizer.step()
+
+        mini_acc_patch = mini_acc_patch / len(all_ids)
+        mini_precision_patch = mini_TP_patch / (mini_TP_patch + mini_FP_patch + 1e-12)
+        mini_recall_patch = mini_TP_patch / (mini_TP_patch + mini_FN_patch + 1e-12)
+
+        mini_acc_line = mini_acc_line / len(line_labels)
+        mini_precision_line = mini_TP_line / (mini_TP_line + mini_FP_line + 1e-12)
+        mini_recall_line = mini_TP_line / (mini_TP_line + mini_FN_line + 1e-12)
+
+        total_loss += float(loss)
+        total_loss_patch += float(mini_loss_patch)
+        total_acc_patch += float(mini_acc_patch)
+        total_precision_patch += float(mini_precision_patch)
+        total_recall_patch += float(mini_recall_patch)
+        total_loss_vertex += float(mini_loss_vertex)
+        total_loss_line += float(mini_loss_line)
+        total_acc_line += float(mini_acc_line)
+        total_precision_line += float(mini_precision_line)
+        total_recall_line += float(mini_recall_line)
+        total += 1
+        print('Epoch %d: Obj: %d loss: %f loss_patch: %f loss_vertex: %f loss_line: %f acc_patch: %f precision_patch: %f recall_patch: %f acc_line: %f precision_line: %f recall_line: %f lr: %f' % (
+          epoch, train_loader_i, total_loss/total, total_loss_patch/total, total_loss_vertex/total, total_loss_line/total,
+          total_acc_patch/total, total_precision_patch/total, total_recall_patch/total,
+          total_acc_line/total, total_precision_line/total, total_recall_line/total, lr))
+        print('static_positive_num: {}, static_negative_num: {}, dynamic_positive_num: {}, dynamic_negative_num: {}'.format(
+          static_positive_num, static_negative_num, dynamic_positive_num, dynamic_negative_num
+        ))
+      except IndexError as e:
+        print(f"Skipping data due to error: {e}")
+        continue  # Skip to the next data item
 
 
     ''' ---end: training---'''
@@ -930,4 +982,5 @@ def evaluate(dataset_loader, patch_size=50, mini_batch=512, nms_th=0.05, line_po
     return total_loss/total, total_loss_patch/total, total_loss_vertex/total, total_loss_line/total, total_acc_patch/total, total_precision_patch/total, total_recall_patch/total, total_acc_line/total, total_precision_line/total, total_recall_line/total
 
 if __name__ == "__main__":
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
     train("./data", patch_size=1)

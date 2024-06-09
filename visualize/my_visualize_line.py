@@ -27,12 +27,19 @@ def filter_nms_vertex(vertex_pred, vertex_probs, line_pred, line_probs, nms_th=0
     '''filter vertex with NMS'''
     print("开始：通过非极大值抑制过滤顶点")
     print("检测到"+str(len(vertex_probs))+"个顶点")
+    print(f"vertex_pred shape: {vertex_pred.shape}")
+    print(f"vertex_probs shape: {vertex_probs.shape}")
+
+    # 确保 vertex_pred 是二维数组
+    if vertex_pred.ndim == 1:
+        vertex_pred = vertex_pred.reshape(-1, 1)
+    elif vertex_pred.ndim != 2:
+        raise ValueError("vertex_pred should be a 2D array with shape (n, 3) or (n, 2)")
     dropped_vertex_index = []
     for vertex_i in range(len(vertex_probs)):
         if vertex_i in dropped_vertex_index:
             continue
-        dist_all = np.linalg.norm(vertex_pred-vertex_pred[vertex_i], axis=1)
-        # print("dist_all:"+str(dist_all))
+        dist_all = np.linalg.norm(vertex_pred - vertex_pred[vertex_i], axis=1)
         same_region_indexes = (dist_all < nms_th).nonzero()
         for same_region_i in same_region_indexes[0]:
             if same_region_i == vertex_i:
@@ -41,12 +48,14 @@ def filter_nms_vertex(vertex_pred, vertex_probs, line_pred, line_probs, nms_th=0
                 dropped_vertex_index.append(same_region_i)
             else:
                 dropped_vertex_index.append(vertex_i)
-    dropped_vertex_index = [i+1 for i in dropped_vertex_index]
+
+    dropped_vertex_index = list(set(dropped_vertex_index))  # 移除重复的索引
     print("丢弃"+str(len(dropped_vertex_index))+"个顶点")
     keep_line_index = []
     for line_i in range(len(line_pred)):
         if (line_pred[line_i][0] not in dropped_vertex_index) and (line_pred[line_i][1] not in dropped_vertex_index):
             keep_line_index.append(line_i)
+
     line_pred = line_pred[keep_line_index]
     line_probs = line_probs[keep_line_index]
     return line_pred, line_probs
@@ -80,6 +89,12 @@ def merge_vertex(vertex_pred, vertex_probs, merge_th=0.02):
 def filter_prob_line(line_pred, line_probs, prob_th=0.5):
     '''filter line with probability'''
     print("开始：根据概率值过滤线段")
+    print(f"line_pred shape: {line_pred.shape}")
+    print(f"line_probs shape: {line_probs.shape}")
+    # print(line_probs)
+    # 确保 line_probs 是一维数组
+    if line_probs.ndim != 1:
+        raise ValueError("line_probs should be a 1D array")
     filter_line = []
     filter_probs = []
     for line_i in range(len(line_probs)):
@@ -87,6 +102,7 @@ def filter_prob_line(line_pred, line_probs, prob_th=0.5):
             filter_line.append(line_pred[line_i])
             filter_probs.append(line_probs[line_i])
     return np.array(filter_line), np.array(filter_probs)
+
 
 def filter_short_line(vertex_pred, line_pred, line_probs, len_th=0.01):
     '''filter short lines'''
@@ -202,7 +218,7 @@ if __name__ == "__main__":
         os.makedirs(save_to_dir)
 
     # vertex_pred_list = glob(os.path.join(curr_dir, f'run_test_result/patch{patch_size}sigma{sigma}clip{clip}/*_vertex.txt'))
-    vertex_pred_list = glob(os.path.join(curr_dir, f'run_test_result/patch{patch_size}sigma{sigma}clip{clip}/000000_vertex.txt'))
+    vertex_pred_list = glob(os.path.join(curr_dir, f'run_test_result/patch{patch_size}sigma{sigma}clip{clip}/*_vertex.txt'))
     for vertex_pred_f in vertex_pred_list:
         # load data
         vertex_pred = np.loadtxt(vertex_pred_f)
@@ -214,10 +230,11 @@ if __name__ == "__main__":
             line_probs = np.expand_dims(line_probs, 0)
         
         # post-processing
-        line_pred, line_probs = filter_prob_vertex(vertex_pred, vertex_probs, line_pred, line_probs, prob_th=0.90)
-        line_pred, line_probs = filter_nms_vertex(vertex_pred, vertex_probs, line_pred, line_probs, nms_th=0.01)
+        # line_pred, line_probs = filter_prob_vertex(vertex_pred, vertex_probs, line_pred, line_probs, prob_th=0.85)
+        print(line_pred)
+        # line_pred, line_probs = filter_nms_vertex(vertex_pred, vertex_probs, line_pred, line_probs, nms_th=0.01)
         # vertex_pred, vertex_probs = merge_vertex(vertex_pred, vertex_probs, merge_th=0.04)
-        line_pred, line_probs = filter_prob_line(line_pred, line_probs, prob_th=0.90)
+        line_pred, line_probs = filter_prob_line(line_pred, line_probs, prob_th=0.5)
         print("通过概率值过滤线段后，剩余"+str(len(line_pred))+"线段")
         line_pred, line_probs = filter_short_line(vertex_pred, line_pred, line_probs, len_th=0.03)
         line_pred, line_probs = filter_nms_line(vertex_pred, line_pred, line_probs, nms_th=0.03)
